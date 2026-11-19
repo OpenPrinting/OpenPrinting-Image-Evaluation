@@ -42,8 +42,18 @@ class ImageComparator:
             if self.original is None or self.processed is None:
                 raise ValueError("One or both images are None. Check input paths or arrays.")
             
+            # Record original dimensions BEFORE any resize so they are not lost
+            self.original_dimensions = (self.original.shape[1], self.original.shape[0])
+            self.processed_dimensions = (self.processed.shape[1], self.processed.shape[0])
+            self.dimensions_match = (self.original_dimensions == self.processed_dimensions)
+            orig_w, orig_h = self.original_dimensions
+            proc_w, proc_h = self.processed_dimensions
+            self.aspect_ratio_difference = abs(
+                (orig_w / orig_h) - (proc_w / proc_h)
+            ) if orig_h > 0 and proc_h > 0 else 0.0
+
             if self.original.shape != self.processed.shape:
-                self.processed = cv2.resize(self.processed, 
+                self.processed = cv2.resize(self.processed,
                                             (self.original.shape[1], self.original.shape[0]))
             
             self.original_gray = cv2.cvtColor(self.original, cv2.COLOR_BGR2GRAY)
@@ -196,7 +206,7 @@ class ImageComparator:
         
         edge_quality_score = (
             edge_similarity * 0.4 +
-            (edge_similarity_tight + edge_similarity_loose) * 0.15 +
+            (edge_similarity_tight + edge_similarity_loose) / 2.0 * 0.3 +
             edge_density_score * 0.15 +
             edge_continuity_score * 0.15
         )
@@ -231,9 +241,17 @@ class ImageComparator:
             
             lab1 = self.original_lab[y, x]
             lab2 = self.processed_lab[y, x]
-            
-            color1 = LabColor(lab1[0], lab1[1], lab1[2])
-            color2 = LabColor(lab2[0], lab2[1], lab2[2])
+
+            # OpenCV LAB range: L=[0,255], a=[0,255] centered at 128, b=[0,255] centered at 128
+            # CIE LAB range:   L=[0,100], a=[-128,127], b=[-128,127]
+            L1 = float(lab1[0]) * 100.0 / 255.0
+            a1 = float(lab1[1]) - 128.0
+            b1 = float(lab1[2]) - 128.0
+            L2 = float(lab2[0]) * 100.0 / 255.0
+            a2 = float(lab2[1]) - 128.0
+            b2 = float(lab2[2]) - 128.0
+            color1 = LabColor(L1, a1, b1)
+            color2 = LabColor(L2, a2, b2)
             
             try:
                 delta_e = delta_e_cie2000(color1, color2)
@@ -314,6 +332,7 @@ class ImageComparator:
                 "correct_page_count": 1,
                 "actual_page_count": 1,
                 "page_completeness_score": 1.0,
+                "reordered_pages": {},
                 "missing_pages": [],
                 "duplicated_pages": []
             }
@@ -477,7 +496,7 @@ class ImageComparator:
             results["overall_content_density"] * 0.05 +
             (1.0 - min(abs(results["rotation_angle"]) / 45.0, 1.0)) * 0.05 +
             (1.0 - min(results["noise_level"] / 50.0, 1.0)) * 0.05 +
-            results["texture_energy"] / 100.0 * 0.05 +
+            min(results["texture_energy"] / 100.0, 1.0) * 0.05 +
             results["avg_rectangularity"] * 0.05 +
             results["color_preservation_score"] * 0.04
         )
@@ -485,7 +504,8 @@ class ImageComparator:
         if "page_completeness_score" in results:
             quality_score = quality_score * 0.85 + results["page_completeness_score"] * 0.15
         
-        results["overall_quality"] = quality_score
+        # Clamp to [0, 1] — individual terms can push beyond bounds
+        results["overall_quality"] = min(1.0, max(0.0, quality_score))
         
         return results
 
@@ -693,7 +713,7 @@ class ImageComparator:
             "salt_pepper_ratio": float((salt_count + pepper_count) / total_pixels),
             "noise_entropy": float(noise_entropy),
             "snr_db": float(snr),
-            "noise_quality": "low" if noise_level > 10 else "medium" if noise_level > 5 else "high"
+            "noise_quality": "high" if noise_level < 5 else "medium" if noise_level < 10 else "low"
         }
     
     def texture_analysis(self):
@@ -727,7 +747,8 @@ class ImageComparator:
         texture_energy = np.mean(gradient_magnitude)
         
         # Texture directionality
-        gradient_direction = np.arctan2(np.asarray(grad_y, dtype=np.float64), np.asarray(grad_x, dtype=np.float64))
+        # cv2.Sobel with CV_64F already returns float64 — no cast needed
+        gradient_direction = np.arctan2(grad_y, grad_x)
         direction_histogram, _ = np.histogram(gradient_direction, bins=36, range=(-np.pi, np.pi))
         direction_uniformity = 1.0 - (entropy(direction_histogram + 1e-10) / np.log(36))
         
@@ -737,7 +758,13 @@ class ImageComparator:
         texture_vis = cv2.applyColorMap(lbp, cv2.COLORMAP_JET)
         cv2.imwrite(os.path.join(self.output_dir, 'texture_lbp.png'), texture_vis)
         
-        contrast_vis = cv2.applyColorMap((local_std * 255 / np.max(local_std)).astype(np.uint8), cv2.COLORMAP_HOT)
+        max_local_std = np.max(local_std)
+        if max_local_std > 0:
+            contrast_vis = cv2.applyColorMap(
+                (local_std * 255 / max_local_std).astype(np.uint8), cv2.COLORMAP_HOT
+            )
+        else:
+            contrast_vis = np.zeros((*local_std.shape, 3), dtype=np.uint8)
         cv2.imwrite(os.path.join(self.output_dir, 'texture_contrast.png'), contrast_vis)
         
         return {
@@ -884,9 +911,16 @@ class ImageComparator:
             
             # Method 3: RGB channel correlation analysis
             # For grayscale, all channels should be highly correlated
-            bg_correlation = np.corrcoef(b_channel.flatten(), g_channel.flatten())[0, 1]
-            br_correlation = np.corrcoef(b_channel.flatten(), r_channel.flatten())[0, 1]
-            gr_correlation = np.corrcoef(g_channel.flatten(), r_channel.flatten())[0, 1]
+            # Guard against constant channels which cause divide-by-zero in corrcoef
+            def _safe_corrcoef(a, b):
+                if np.std(a) == 0 or np.std(b) == 0:
+                    return 1.0 if np.allclose(a, b) else 0.0
+                val = np.corrcoef(a.flatten(), b.flatten())[0, 1]
+                return float(val) if not np.isnan(val) else 1.0
+
+            bg_correlation = _safe_corrcoef(b_channel, g_channel)
+            br_correlation = _safe_corrcoef(b_channel, r_channel)
+            gr_correlation = _safe_corrcoef(g_channel, r_channel)
             
             min_correlation = min(bg_correlation, br_correlation, gr_correlation)
             mean_correlation = (bg_correlation + br_correlation + gr_correlation) / 3.0

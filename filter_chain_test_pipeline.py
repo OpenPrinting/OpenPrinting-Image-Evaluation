@@ -206,7 +206,7 @@ class FilterChainTestPipeline:
                 # need to infer it from the temporary file.
                 cmd = [
                     'cupsfilter',
-                    '-p', self.printer_queue,
+                    '-d', self.printer_queue,
                     '-i', input_mime,
                     '--list-filters'
                 ]
@@ -244,18 +244,18 @@ class FilterChainTestPipeline:
                         f"cupsfilter failed for {input_mime}: {result.stderr.strip()}"
                     )
 
-                return filters if filters else ['direct']
+                return filters if filters else []
 
             finally:
                 if os.path.exists(temp_path):
                     os.unlink(temp_path)
 
         except Exception as e:
-            self.logger.debug(f"Filter chain discovery failed for {input_mime}: {e}")
+            self.logger.warning(f"Filter chain discovery failed for {input_mime}: {e}")
             try:
                 return get_filter_chain(self.printer_queue, input_mime)
             except:
-                return ['direct']
+                return []
 
     def _parse_filter_chain_from_output(self, debug_output: str) -> List[str]:
         """Parse CUPS debug output to extract filter chain"""
@@ -337,7 +337,7 @@ class FilterChainTestPipeline:
                         test_image, mode, mode_name
                     )
                     
-                    if filter_outputs:
+                    if filter_outputs and any(v is not None for v in filter_outputs.values()):
                         # Compare each filter chain output with original
                         comparison_results = {}
                         
@@ -350,12 +350,12 @@ class FilterChainTestPipeline:
                         mode_results['image_results'][image_name] = {
                             'filter_outputs': filter_outputs,
                             'comparison_results': comparison_results,
-                            'status': 'success'
+                            'status': 'completed'
                         }
                     else:
                         mode_results['image_results'][image_name] = {
                             'status': 'failed',
-                            'error': 'Filter chain processing failed'
+                            'error': 'All filter chain outputs failed'
                         }
                         
                 except Exception as e:
@@ -375,8 +375,27 @@ class FilterChainTestPipeline:
         
         filter_outputs = {}
         mode_filter_chains = self.filter_chains.get(mode_name, {})
-        
+
+        # Determine the actual MIME type of the input file so we only run
+        # the matching filter chain (avoid piping PNG through PDF/text chains).
+        ext = os.path.splitext(image_path)[1].lower()
+        mime_map = {
+            '.png':  'image/png',
+            '.jpg':  'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.pdf':  'application/pdf',
+            '.ps':   'application/postscript',
+            '.txt':  'text/plain',
+        }
+        actual_mime = mime_map.get(ext, 'image/png')
+
         for input_type, filter_chain in mode_filter_chains.items():
+            if input_type != actual_mime:
+                self.logger.debug(
+                    f"Skipping {input_type} chain for {os.path.basename(image_path)} "
+                    f"(actual type: {actual_mime})"
+                )
+                continue
             try:
                 self.logger.debug(f"Processing {os.path.basename(image_path)} through {input_type} filter chain: {filter_chain}")
                 
@@ -502,9 +521,8 @@ class FilterChainTestPipeline:
                 return True
                 
             else:
-                self.logger.warning(f"Unknown filter: {filter_name}, using direct copy")
-                shutil.copy2(input_path, output_path)
-                return True
+                self.logger.error(f"Unknown/unhandled filter: {filter_name} — skipping")
+                return False
                 
         except Exception as e:
             self.logger.error(f"Filter {filter_name} execution failed: {e}")
@@ -727,7 +745,11 @@ class FilterChainTestPipeline:
             test_date=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             total_modes=len(self.results),
             total_images=sum(len(mode_results['image_results']) for mode_results in self.results.values()),
-            total_filter_chains=sum(len(mode_results['filter_chains']) for mode_results in self.results.values()),
+            total_filter_chains=sum(
+                len(chains)
+                for mode_results in self.results.values()
+                for chains in mode_results['filter_chains'].values()
+            ),
             mode_sections=mode_sections
         )
         
@@ -742,7 +764,15 @@ class FilterChainTestPipeline:
         
         for image_name, result in mode_results['image_results'].items():
             status_class = result['status']
-            if result['status'] == 'success':
+            # Map internal status to a human-readable label
+            status_label_map = {
+                'completed': 'Completed (metrics only)',
+                'success':   'Completed (metrics only)',
+                'failed':    'Failed',
+                'error':     'Error',
+            }
+            status_label = status_label_map.get(result['status'], result['status'])
+            if result['status'] in ('completed', 'success'):
                 # quality scores
                 quality_info = ""
                 comparison_results = result.get('comparison_results', {})
@@ -755,7 +785,7 @@ class FilterChainTestPipeline:
             image_results_html += f"""
             <tr>
                 <td>{image_name}</td>
-                <td class="{status_class}">{result['status']}</td>
+                <td class="{status_class}">{status_label}</td>
                 <td>{quality_info}</td>
             </tr>
             """
@@ -804,8 +834,11 @@ class FilterChainTestPipeline:
             'successful_tests': successful_tests,
             'success_rate': successful_tests / total_tests if total_tests > 0 else 0,
             'total_modes_tested': len(self.results),
-            'total_filter_chains': sum(len(mode_results['filter_chains']) 
-                                     for mode_results in self.results.values())
+            'total_filter_chains': sum(
+                len(chains)
+                for mode_results in self.results.values()
+                for chains in mode_results['filter_chains'].values()
+            )
         }
         
     def run_complete_pipeline(self) -> str:

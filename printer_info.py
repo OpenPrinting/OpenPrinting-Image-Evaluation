@@ -184,12 +184,17 @@ def get_filter_chain(printer_name: str, input_mime_type: str = 'application/pdf'
             ]
             print(f"Running command: {' '.join(command)}")
 
-            result = subprocess.run(command, capture_output=True, text=True, check=True)
-            output = result.stdout if result.stdout else result.stderr
+            result = subprocess.run(command, capture_output=True, text=True, check=False)
+            # Use stdout first; some CUPS versions write filters to stderr
+            output = result.stdout.strip() or result.stderr.strip()
 
-            filters = [line.strip() for line in output.splitlines() if line.strip() and not line.startswith("DEBUG:")]
-            if not filters and result.returncode == 0:
-                 return ["(No specific filters needed or listed)"]
+            filters = [
+                line.strip()
+                for line in output.splitlines()
+                if line.strip() and not line.startswith("DEBUG:")
+            ]
+            if not filters:
+                return ["(No specific filters needed or listed)"]
             return filters
 
     except subprocess.CalledProcessError as e:

@@ -86,7 +86,6 @@ class PrintQualityTestPipeline:
         
         for dir_path in self.dirs.values():
             os.makedirs(dir_path, exist_ok=True)
-            os.makedirs(dir_path, exist_ok=True)
             
     def analyze_printer_capabilities(self) -> Dict[str, Any]:
         """Automatically detect printer capabilities and supported modes"""
@@ -412,9 +411,8 @@ class PrintQualityTestPipeline:
                 if result.returncode == 0:
                     # output in common CUPS output directories
                     output_dirs = [
-                        # '/var/spool/cups-pdf',
-                        # f'/home/{os.getenv("USER")}/Desktop',
-                        f'/home/{os.getenv("USER")}/gsoc/openprinting/PDF',
+                        str(Path.home() / "PDF"),
+                        str(Path.home() / "Desktop"),
                         './PDF'
                     ]
                     
