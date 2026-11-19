@@ -305,16 +305,12 @@ class ComprehensiveTestImageGenerator:
                 cv2.rectangle(img, (j, i), (j+40, i+40), 0, 2)
         patterns['random_texture'] = img
         
-        # 5. Smooth Gradient Pattern
-        img = np.zeros((self.height, self.width), dtype=np.uint8)
-        for y in range(self.height):
-            for x in range(self.width):
-                # Create radial gradient
-                center_x, center_y = self.width // 2, self.height // 2
-                distance = np.sqrt((x - center_x)**2 + (y - center_y)**2)
-                max_distance = np.sqrt(center_x**2 + center_y**2)
-                intensity = int(255 * (1 - distance / max_distance))
-                img[y, x] = max(0, min(255, intensity))
+        # 5. Smooth Gradient Pattern (vectorized — O(n²) Python loop is too slow at high DPI)
+        cx, cy = self.width // 2, self.height // 2
+        y_coords, x_coords = np.ogrid[:self.height, :self.width]
+        distance = np.sqrt((x_coords - cx) ** 2 + (y_coords - cy) ** 2)
+        max_distance = np.sqrt(cx ** 2 + cy ** 2)
+        img = np.clip(255 * (1 - distance / max_distance), 0, 255).astype(np.uint8)
         patterns['smooth_gradient'] = img
         
         return patterns

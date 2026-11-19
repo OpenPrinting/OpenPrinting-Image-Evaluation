@@ -1,11 +1,21 @@
 import cv2
 from skimage.metrics import structural_similarity as ssim
 import numpy as np
+import sys
 
-original = cv2.imread('sample.png')
-processed = cv2.imread('sample.png')
+# Allow passing image paths as arguments; fall back to default names
+original_path  = sys.argv[1] if len(sys.argv) > 1 else 'sample.png'
+processed_path = sys.argv[2] if len(sys.argv) > 2 else 'output.png'
 
-gray1 = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY)
+original  = cv2.imread(original_path)
+processed = cv2.imread(processed_path)
+
+if original is None:
+    raise FileNotFoundError(f"Could not load original image: {original_path}")
+if processed is None:
+    raise FileNotFoundError(f"Could not load processed image: {processed_path}")
+
+gray1 = cv2.cvtColor(original,  cv2.COLOR_BGR2GRAY)
 gray2 = cv2.cvtColor(processed, cv2.COLOR_BGR2GRAY)
 
 (score, diff) = ssim(gray1, gray2, full=True)

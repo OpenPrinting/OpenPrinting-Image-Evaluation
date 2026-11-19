@@ -193,7 +193,7 @@ pip install pycups
 **For Fedora/RHEL users**:
 
 ```bash
-pip install -c requirements.txt
+pip install -r requirements.txt
 ```
 
 **Important**: Make sure to install `pycups` (not `cups`). The `cups` package from pip conflicts with the required `pycups` library.

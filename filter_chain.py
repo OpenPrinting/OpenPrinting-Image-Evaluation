@@ -154,13 +154,6 @@ def get_filter_chain(printer_name: str, input_mime_type: str = 'application/pdf'
         real_input_type = "application/pdf"
         print(f"Assuming decompressed content type: {real_input_type}")
     
-    # Step 0: Special handling for PDF which might be treated as compressed
-    if input_mime_type == 'application/pdf' and output_mime_type is None:
-        # CUPS often treats PDF as potentially compressed, so return gziptoany
-        # This matches the cupsfilter default behavior for PDF input
-        print("Special case: PDF without output type, returning gziptoany filter")
-        return ['gziptoany']
-    
     # Continue with the existing filter chain determination using real_input_type
     # Step 1: Connect to CUPS and get the printer's PPD
     try:
